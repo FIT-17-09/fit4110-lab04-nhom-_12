@@ -1,44 +1,38 @@
-# syntax=docker/dockerfile:1.7
+# Build stage
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 
-FROM python:3.11-slim AS builder
+WORKDIR /src
 
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+COPY src/CoreBusiness.API .
 
-WORKDIR /build
+RUN dotnet restore CoreBusiness.API.csproj
 
-RUN python -m venv /opt/venv
+RUN dotnet publish CoreBusiness.API.csproj \
+    -c Release \
+    -o /app/publish
 
-COPY requirements.txt .
+# Runtime stage
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
 
-RUN /opt/venv/bin/pip install --no-cache-dir --upgrade pip \
-    && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
+RUN apt-get update && \
+    apt-get install -y curl && \
+    rm -rf /var/lib/apt/lists/*
 
-
-FROM python:3.11-slim AS runtime
-
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV PATH="/opt/venv/bin:$PATH"
-ENV APP_HOST=0.0.0.0
-ENV APP_PORT=8000
-ENV AUTH_TOKEN=local-dev-token
+RUN useradd -m appuser
 
 WORKDIR /app
 
-RUN addgroup --system appgroup \
-    && adduser --system --ingroup appgroup --home /app appuser
+COPY --from=build /app/publish .
 
-COPY --from=builder /opt/venv /opt/venv
-COPY src/ ./src/
-
-RUN chown -R appuser:appgroup /app
+RUN chown -R appuser:appuser /app
 
 USER appuser
 
-EXPOSE 8000
+EXPOSE 8080
+
+ENV ASPNETCORE_URLS=http://+:8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()" || exit 1
+ CMD curl --fail http://localhost:8080/api/Health || exit 1
 
-CMD ["sh", "-c", "uvicorn iot_app.main:app --app-dir src --host ${APP_HOST} --port ${APP_PORT}"]
+ENTRYPOINT ["dotnet", "CoreBusiness.API.dll"]
